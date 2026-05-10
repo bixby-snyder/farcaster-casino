@@ -32,9 +32,9 @@ The repo does not include the exact deployed Overtime Blackjack contract ABI/sig
 - Verified collateral token addresses for USDC, WETH, and OVER on the supported network.
 - Verified affiliate referrer wallet address.
 - Exact Blackjack ABI from `github.com/thales-markets/contracts-v2/contracts/core/Casino/`, including:
-  - `placeBet` or equivalent deal entrypoint signature.
-  - Any cancellation/recovery function for stuck bets.
-  - Event signatures for `BetPlaced`, `BetResolved`, and `BetCancelled`.
+  - Confirmed selected-network Blackjack proxy address.
+  - User cancellation/recovery behavior around `cancelHand(uint256)`.
+  - Event indexing for `HandCreated`, `HandResolved`, `HandCancelled`, and `ReferrerPaid`.
 
 ## Safety Notes
 

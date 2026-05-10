@@ -130,7 +130,7 @@ export default function Home() {
   ]);
 
   const [hideDealerCard, setHideDealerCard] = useState(true);
-  const [gameStatus, setGameStatus] = useState("Choose your wager. Deal when ready.");
+  const [gameStatus, setGameStatus] = useState("Choose your wager. Place bet when ready.");
   const [gamePhase, setGamePhase] = useState<GamePhase>("idle");
   const [checkIns, setCheckIns] = useState(15);
 
@@ -297,21 +297,21 @@ export default function Home() {
 
     setManualAffiliateBetState("pending-vrf");
     setAffiliateResult(
-      "Blocked until the verified Blackjack placeBet ABI is supplied. The transaction must pass the affiliate referrer address."
+      "Staged only: placeBet(address,uint256,address) is verified, but real writes stay blocked until the selected proxy address, collateral addresses, and affiliate referrer wallet are explicitly approved."
     );
   }
 
   function markPlaceholderResolved() {
     setManualAffiliateBetState("resolved");
     setAffiliateResult(
-      "Resolved result will come from BetResolved after Chainlink VRF fulfillment."
+      "Resolved result will come from HandResolved after Chainlink VRF fulfillment."
     );
   }
 
   function showRecoverPlaceholder() {
     setManualAffiliateBetState("recover");
     setAffiliateResult(
-      "Recovery/cancel requires the verified Blackjack stuck-bet timeout and cancel ABI."
+      "Recovery uses cancelHand(uint256 handId) after the Blackjack cancel timeout."
     );
   }
 
@@ -461,13 +461,13 @@ export default function Home() {
             </div>
           )}
 
-          {gamePhase === "over" && (
+            {gamePhase === "over" && (
             <motion.button
               whileTap={{ scale: 0.97 }}
               onClick={startHand}
               className="mt-2 w-full rounded-xl bg-yellow-400 p-3 font-black text-black"
             >
-              Deal Again
+              Place Bet / Deal Hand
             </motion.button>
           )}
         </motion.section>
@@ -774,10 +774,10 @@ function OvertimeAffiliatePanel({
     "select-collateral": "Select configured collateral",
     "enter-wager": "Enter wager amount",
     approve: "Approve collateral",
-    ready: "Ready to place with referrer",
+    ready: "Ready to placeBet with referrer",
     "pending-vrf": "Pending VRF resolution",
-    resolved: "Resolved result",
-    recover: "Recover/cancel placeholder",
+    resolved: "HandResolved result",
+    recover: "cancelHand placeholder",
   };
 
   return (
@@ -812,11 +812,13 @@ function OvertimeAffiliatePanel({
           Allowance: {formattedAllowance} {asset}
         </div>
         <div className="mt-1">
+          Events: HandCreated, HandResolved, HandCancelled, ReferrerPaid.
+        </div>
+        <div className="mt-1">
           URL referral: referrerId=casino is outbound tracking only.
         </div>
         <div className="mt-1">
-          Onchain attribution: verified bets must pass the affiliate wallet as
-          _referrer.
+          Onchain attribution: placeBet must pass the affiliate wallet as _referrer.
         </div>
       </div>
 
@@ -845,8 +847,22 @@ function OvertimeAffiliatePanel({
           disabled={!canPlace}
           className="rounded-xl bg-gradient-to-r from-yellow-300 via-yellow-500 to-orange-700 p-3 text-sm font-black text-black disabled:opacity-40"
         >
-          Place Bet
+          Place Bet / Deal Hand
         </motion.button>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        {["hit(uint256)", "stand(uint256)", "doubleDown(uint256)", "split(uint256)"].map(
+          (signature) => (
+            <button
+              key={signature}
+              disabled
+              className="rounded-xl border border-zinc-500/25 bg-zinc-700/20 p-2 text-[11px] font-black text-zinc-400"
+            >
+              {signature}
+            </button>
+          )
+        )}
       </div>
 
       <a
@@ -890,7 +906,7 @@ function OvertimeAffiliatePanel({
           onClick={onRecoverPlaceholder}
           className="rounded-xl border border-red-400/25 bg-red-500/10 p-2 text-xs font-black text-red-100"
         >
-          Recover Stuck Bet
+          cancelHand(uint256)
         </button>
       </div>
 
