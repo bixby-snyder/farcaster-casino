@@ -11,7 +11,7 @@ import {
   useWaitForTransactionReceipt,
   useWriteContract,
 } from "wagmi";
-import { formatUnits, isAddress, parseUnits } from "viem";
+import { isAddress, parseUnits } from "viem";
 import {
   AFFILIATE_REFERRER_ADDRESS,
   CollateralSymbol,
@@ -19,11 +19,9 @@ import {
   OVERTIME_CHAIN_ID,
   OVERTIME_REFERRAL_URL,
   SUPPORTED_COLLATERALS,
-  SupportedCollateral,
   hasVerifiedOvertimeConfig,
 } from "@/lib/overtime/config";
 import { erc20Abi } from "@/lib/overtime/abi";
-import { blackjackIntegrationStatus } from "@/lib/overtime/blackjack-placeholder";
 
 const chips = [3, 10, 25, 50, 100];
 
@@ -101,6 +99,28 @@ function getAffiliateBetState({
   return "ready";
 }
 
+function getPlayerStatus({
+  affiliateBetState,
+  approvalBusy,
+  approvalConfirmed,
+  gamePhase,
+  isConnected,
+}: {
+  affiliateBetState: AffiliateBetState;
+  approvalBusy: boolean;
+  approvalConfirmed: boolean;
+  gamePhase: GamePhase;
+  isConnected: boolean;
+}) {
+  if (!isConnected) return "Connect wallet to save your seat.";
+  if (approvalBusy) return "Preparing your chips...";
+  if (gamePhase === "active") return "Hand active. Choose your next move.";
+  if (gamePhase === "over") return "Resolved hand. Ready for the next shoe.";
+  if (affiliateBetState === "pending-vrf") return "Waiting for the shuffle...";
+  if (approvalConfirmed) return "Chips ready. The table is set.";
+  return "Staging table: live wagers open after final house verification.";
+}
+
 export default function Home() {
   const ambienceRef = useRef<HTMLAudioElement | null>(null);
   const musicRef = useRef<HTMLAudioElement | null>(null);
@@ -114,9 +134,6 @@ export default function Home() {
   const [asset, setAsset] = useState<CollateralSymbol>("USDC");
   const [manualAffiliateBetState, setManualAffiliateBetState] =
     useState<AffiliateBetState | null>(null);
-  const [affiliateResult, setAffiliateResult] = useState(
-    "No Overtime bet submitted yet."
-  );
   const [shareStatus, setShareStatus] = useState("Share-to-cast is ready when opened inside Farcaster.");
 
   const [playerCards, setPlayerCards] = useState<Card[]>([
@@ -146,6 +163,7 @@ export default function Home() {
   const validBlackjackAddress = isAddress(OVERTIME_BLACKJACK_ADDRESS);
   const validAffiliateAddress = isAddress(AFFILIATE_REFERRER_ADDRESS);
   const configReady = hasVerifiedOvertimeConfig() && validCollateralAddress;
+  void validAffiliateAddress;
   const onExpectedChain = chainId === OVERTIME_CHAIN_ID;
 
   const {
@@ -194,9 +212,13 @@ export default function Home() {
     derivedAffiliateBetState === "ready" && manualAffiliateBetState
       ? manualAffiliateBetState
       : derivedAffiliateBetState;
-  const displayedAffiliateResult = approvalConfirmed
-    ? "Collateral approval confirmed."
-    : affiliateResult;
+  const playerStatus = getPlayerStatus({
+    affiliateBetState,
+    approvalBusy,
+    approvalConfirmed,
+    gamePhase,
+    isConnected,
+  });
 
   useEffect(() => {
     if (ambienceRef.current) ambienceRef.current.volume = 0.22;
@@ -293,26 +315,16 @@ export default function Home() {
   }
 
   function handlePlaceOvertimeBet() {
-    if (!configReady || needsApproval || !onExpectedChain) return;
+    if (configReady && !needsApproval && onExpectedChain) {
+      setManualAffiliateBetState("pending-vrf");
+    }
 
-    setManualAffiliateBetState("pending-vrf");
-    setAffiliateResult(
-      "Staged only: placeBet(address,uint256,address) is verified, but real writes stay blocked until the selected proxy address, collateral addresses, and affiliate referrer wallet are explicitly approved."
-    );
-  }
-
-  function markPlaceholderResolved() {
-    setManualAffiliateBetState("resolved");
-    setAffiliateResult(
-      "Resolved result will come from HandResolved after Chainlink VRF fulfillment."
-    );
+    startHand();
   }
 
   function showRecoverPlaceholder() {
     setManualAffiliateBetState("recover");
-    setAffiliateResult(
-      "Recovery uses cancelHand(uint256 handId) after the Blackjack cancel timeout."
-    );
+    setGameStatus("A table attendant is reviewing that move.");
   }
 
   async function shareToCastPlaceholder() {
@@ -547,28 +559,24 @@ export default function Home() {
             </select>
           </div>
 
-          <OvertimeAffiliatePanel
+          <CasinoActionArea
             affiliateBetState={affiliateBetState}
-            affiliateResult={displayedAffiliateResult}
-            allowance={allowance}
             approvalBusy={approvalBusy}
             asset={asset}
             bet={bet}
             configReady={configReady}
+            gamePhase={gamePhase}
+            hit={hit}
             isConnected={isConnected}
             needsApproval={needsApproval}
             onApproveCollateral={handleApproveCollateral}
-            onExpectedChain={onExpectedChain}
+            onDouble={showRecoverPlaceholder}
             onPlaceOvertimeBet={handlePlaceOvertimeBet}
-            onPreviewHand={startHand}
-            onRecoverPlaceholder={showRecoverPlaceholder}
-            onResolvePlaceholder={markPlaceholderResolved}
             onShareToCast={shareToCastPlaceholder}
-            selectedCollateral={selectedCollateral}
+            onSplit={showRecoverPlaceholder}
             shareStatus={shareStatus}
-            validAffiliateAddress={validAffiliateAddress}
-            validBlackjackAddress={validBlackjackAddress}
-            wagerAmount={wagerAmount}
+            stand={stand}
+            statusLine={playerStatus}
           />
         </section>
 
@@ -711,222 +719,154 @@ function CasinoAccessCard() {
   );
 }
 
-function OvertimeAffiliatePanel({
+function CasinoActionArea({
   affiliateBetState,
-  affiliateResult,
-  allowance,
   approvalBusy,
   asset,
   bet,
   configReady,
+  gamePhase,
+  hit,
   isConnected,
   needsApproval,
   onApproveCollateral,
-  onExpectedChain,
+  onDouble,
   onPlaceOvertimeBet,
-  onPreviewHand,
-  onRecoverPlaceholder,
-  onResolvePlaceholder,
   onShareToCast,
-  selectedCollateral,
+  onSplit,
   shareStatus,
-  validAffiliateAddress,
-  validBlackjackAddress,
-  wagerAmount,
+  stand,
+  statusLine,
 }: {
   affiliateBetState: AffiliateBetState;
-  affiliateResult: string;
-  allowance: bigint;
   approvalBusy: boolean;
   asset: CollateralSymbol;
   bet: number;
   configReady: boolean;
+  gamePhase: GamePhase;
+  hit: () => void;
   isConnected: boolean;
   needsApproval: boolean;
   onApproveCollateral: () => void;
-  onExpectedChain: boolean;
+  onDouble: () => void;
   onPlaceOvertimeBet: () => void;
-  onPreviewHand: () => void;
-  onRecoverPlaceholder: () => void;
-  onResolvePlaceholder: () => void;
   onShareToCast: () => void;
-  selectedCollateral: SupportedCollateral;
+  onSplit: () => void;
   shareStatus: string;
-  validAffiliateAddress: boolean;
-  validBlackjackAddress: boolean;
-  wagerAmount: bigint;
+  stand: () => void;
+  statusLine: string;
 }) {
-  const formattedAllowance = formatUnits(allowance, selectedCollateral.decimals);
-  const canApprove =
-    isConnected &&
-    configReady &&
-    wagerAmount > BigInt(0) &&
-    needsApproval &&
-    !approvalBusy;
-  const canPlace =
-    isConnected &&
-    configReady &&
-    onExpectedChain &&
-    !needsApproval &&
-    wagerAmount > BigInt(0);
-  const stateCopy: Record<AffiliateBetState, string> = {
+  const canDeal = bet >= 3 && gamePhase !== "active";
+  const showApproval = isConnected && configReady && needsApproval;
+  const statusTone: Record<AffiliateBetState, string> = {
     connect: "Connect wallet",
-    "select-collateral": "Select configured collateral",
-    "enter-wager": "Enter wager amount",
-    approve: "Approve collateral",
-    ready: "Ready to placeBet with referrer",
-    "pending-vrf": "Pending VRF resolution",
-    resolved: "HandResolved result",
-    recover: "cancelHand placeholder",
+    "select-collateral": "Choose chips",
+    "enter-wager": "Set wager",
+    approve: "Chips pending",
+    ready: "Table ready",
+    "pending-vrf": "Shuffling",
+    resolved: "Settled",
+    recover: "Reviewing",
   };
 
   return (
-    <div className="mt-4 rounded-2xl border border-yellow-400/25 bg-black/45 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-xs font-black uppercase tracking-[0.24em] text-yellow-300">
-            Overtime Casino
-          </div>
-          <div className="mt-1 text-sm font-bold text-zinc-300">
-            Affiliate bet wrapper
-          </div>
+    <div className="mt-4 rounded-2xl border border-yellow-400/25 bg-black/45 p-4">
+      <div className="flex items-center justify-between gap-3 rounded-xl border border-yellow-400/15 bg-yellow-400/10 px-3 py-2">
+        <div className="text-xs font-black uppercase tracking-[0.22em] text-yellow-200">
+          {statusTone[affiliateBetState]}
         </div>
-
-        <div className="rounded-full border border-cyan-300/30 bg-cyan-400/10 px-3 py-1 text-[11px] font-black text-cyan-100">
-          {stateCopy[affiliateBetState]}
-        </div>
-      </div>
-
-      <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] font-bold text-zinc-300">
-        <ConfigBadge label="Blackjack" ready={validBlackjackAddress} />
-        <ConfigBadge label="Referrer" ready={validAffiliateAddress} />
-        <ConfigBadge label={`${asset} Token`} ready={isAddress(selectedCollateral.address)} />
-        <ConfigBadge label={`Chain ${OVERTIME_CHAIN_ID}`} ready={onExpectedChain} />
-      </div>
-
-      <div className="mt-3 rounded-xl border border-purple-400/20 bg-purple-950/30 p-3 text-xs leading-5 text-zinc-300">
-        <div>
-          Flow: {blackjackIntegrationStatus.randomnessFlow}
-        </div>
-        <div className="mt-1">
-          Allowance: {formattedAllowance} {asset}
-        </div>
-        <div className="mt-1">
-          Events: HandCreated, HandResolved, HandCancelled, ReferrerPaid.
-        </div>
-        <div className="mt-1">
-          URL referral: referrerId=casino is outbound tracking only.
-        </div>
-        <div className="mt-1">
-          Onchain attribution: placeBet must pass the affiliate wallet as _referrer.
+        <div className="text-right text-xs font-bold text-zinc-300">
+          {statusLine}
         </div>
       </div>
 
       {!configReady && (
-        <div className="mt-3 rounded-xl border border-red-400/25 bg-red-500/10 p-3 text-xs font-bold leading-5 text-red-100">
-          Contract addresses are placeholders. Add verified Overtime Blackjack,
-          collateral, and affiliate referrer addresses before placing real bets.
+        <div className="mt-3 rounded-xl border border-yellow-400/15 bg-black/35 p-3 text-xs font-bold leading-5 text-zinc-300">
+          Practice table is open. Live Overtime wagers unlock after final table
+          verification.
         </div>
       )}
 
-      <div className="mt-3 grid grid-cols-2 gap-2">
+      {showApproval && (
         <motion.button
           whileHover={{ scale: 1.03 }}
           whileTap={{ scale: 0.97 }}
           onClick={onApproveCollateral}
-          disabled={!canApprove}
-          className="rounded-xl bg-cyan-300 p-3 text-sm font-black text-black disabled:opacity-40"
+          disabled={approvalBusy}
+          className="mt-3 w-full rounded-xl bg-cyan-300 p-3 text-sm font-black text-black disabled:opacity-40"
         >
-          {approvalBusy ? "Approving..." : "Approve"}
+          {approvalBusy ? "Preparing Chips..." : "Ready Chips"}
         </motion.button>
+      )}
 
+      {gamePhase !== "active" ? (
         <motion.button
           whileHover={{ scale: 1.03 }}
           whileTap={{ scale: 0.97 }}
           onClick={onPlaceOvertimeBet}
-          disabled={!canPlace}
-          className="rounded-xl bg-gradient-to-r from-yellow-300 via-yellow-500 to-orange-700 p-3 text-sm font-black text-black disabled:opacity-40"
+          disabled={!canDeal}
+          className="mt-3 w-full rounded-2xl bg-gradient-to-r from-yellow-300 via-yellow-500 to-orange-700 p-4 text-base font-black text-black shadow-lg shadow-yellow-500/20 disabled:opacity-40"
         >
-          Place Bet / Deal Hand
+          🎲 Deal Hand · ${bet} {asset}
         </motion.button>
-      </div>
+      ) : (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <motion.button
+            whileTap={{ scale: 0.95 }}
+            onClick={hit}
+            className="rounded-xl bg-emerald-400 p-3 font-black text-black"
+          >
+            🎴 Hit
+          </motion.button>
 
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        {["hit(uint256)", "stand(uint256)", "doubleDown(uint256)", "split(uint256)"].map(
-          (signature) => (
-            <button
-              key={signature}
-              disabled
-              className="rounded-xl border border-zinc-500/25 bg-zinc-700/20 p-2 text-[11px] font-black text-zinc-400"
-            >
-              {signature}
-            </button>
-          )
-        )}
-      </div>
+          <motion.button
+            whileTap={{ scale: 0.95 }}
+            onClick={stand}
+            className="rounded-xl bg-red-500 p-3 font-black text-white"
+          >
+            🛑 Stand
+          </motion.button>
 
-      <a
-        href={OVERTIME_REFERRAL_URL}
-        target="_blank"
-        rel="noreferrer"
-        className="mt-2 flex w-full items-center justify-center rounded-xl border border-cyan-400/30 bg-cyan-400/10 p-3 text-sm font-black text-cyan-100"
-      >
-        Open Overtime Markets
-      </a>
+          <motion.button
+            whileTap={{ scale: 0.95 }}
+            onClick={onDouble}
+            className="rounded-xl border border-yellow-400/35 bg-yellow-400/15 p-3 font-black text-yellow-100"
+          >
+            💰 Double
+          </motion.button>
 
-      <button
-        onClick={onShareToCast}
-        className="mt-2 w-full rounded-xl border border-purple-300/30 bg-purple-400/10 p-3 text-sm font-black text-purple-100"
-      >
-        Share Mini App
-      </button>
+          <motion.button
+            whileTap={{ scale: 0.95 }}
+            onClick={onSplit}
+            className="rounded-xl border border-cyan-400/35 bg-cyan-400/15 p-3 font-black text-cyan-100"
+          >
+            ✂️ Split
+          </motion.button>
+        </div>
+      )}
 
-      <div className="mt-2 rounded-xl bg-black/40 p-3 text-xs leading-5 text-zinc-300">
-        {shareStatus}
-      </div>
-
-      <motion.button
-        disabled={bet < 3}
-        whileHover={{ scale: 1.03 }}
-        whileTap={{ scale: 0.97 }}
-        onClick={onPreviewHand}
-        className="mt-2 w-full rounded-xl border border-yellow-400/30 bg-yellow-400/10 p-3 text-sm font-black text-yellow-100 disabled:opacity-40"
-      >
-        Preview Blackjack Hand · ${bet} in {asset}
-      </motion.button>
-
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <button
-          onClick={onResolvePlaceholder}
-          className="rounded-xl border border-emerald-400/25 bg-emerald-500/10 p-2 text-xs font-black text-emerald-100"
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-black">
+        <a
+          href={OVERTIME_REFERRAL_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-xl border border-cyan-400/25 bg-cyan-400/10 p-3 text-center text-cyan-100"
         >
-          Resolved Result
-        </button>
+          Visit Overtime
+        </a>
         <button
-          onClick={onRecoverPlaceholder}
-          className="rounded-xl border border-red-400/25 bg-red-500/10 p-2 text-xs font-black text-red-100"
+          onClick={onShareToCast}
+          className="rounded-xl border border-purple-300/25 bg-purple-400/10 p-3 text-purple-100"
         >
-          cancelHand(uint256)
+          Share Table
         </button>
       </div>
 
-      <div className="mt-3 rounded-xl bg-black/40 p-3 text-xs leading-5 text-zinc-300">
-        {affiliateResult}
-      </div>
-    </div>
-  );
-}
-
-function ConfigBadge({ label, ready }: { label: string; ready: boolean }) {
-  return (
-    <div
-      className={`rounded-xl border px-3 py-2 ${
-        ready
-          ? "border-emerald-400/25 bg-emerald-500/10 text-emerald-100"
-          : "border-yellow-400/20 bg-yellow-500/10 text-yellow-100"
-      }`}
-    >
-      {label}: {ready ? "Ready" : "Needed"}
+      {shareStatus && (
+        <div className="mt-2 rounded-xl bg-black/30 p-2 text-center text-[11px] font-bold text-zinc-400">
+          {shareStatus}
+        </div>
+      )}
     </div>
   );
 }
