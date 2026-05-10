@@ -52,10 +52,15 @@ const casinoAccessTiers = [
 ];
 
 type CasinoAccessTier = (typeof casinoAccessTiers)[number];
+type MintStatus = "Not Minted" | "Mint Ready" | "Minting Soon";
 
-type CasinoAccessRewards = {
-  checkIns: number;
+type CasinoAccessRewardsState = {
+  firstCheckInDate: string | null;
+  memberSinceLabel: string | null;
+  checkInCount: number;
+  currentCardTier: string;
   lastCheckInDate: string | null;
+  mintStatus: MintStatus;
 };
 
 function getTodayKey() {
@@ -72,29 +77,72 @@ function getNextTier(checkIns: number) {
   return casinoAccessTiers.find((tier) => checkIns < tier.checkIns) ?? null;
 }
 
-function getStoredRewards(): CasinoAccessRewards {
+function getMemberSinceLabel(dateKey: string) {
+  const [year, month] = dateKey.split("-");
+  if (!year || !month) return null;
+
+  return `${month}/${year.slice(-2)}`;
+}
+
+function getDefaultRewards(): CasinoAccessRewardsState {
+  return {
+    firstCheckInDate: null,
+    memberSinceLabel: null,
+    checkInCount: 15,
+    currentCardTier: "House Card",
+    lastCheckInDate: null,
+    mintStatus: "Not Minted",
+  };
+}
+
+function getStoredRewards(): CasinoAccessRewardsState {
   if (typeof window === "undefined") {
-    return { checkIns: 15, lastCheckInDate: null };
+    return getDefaultRewards();
   }
 
   try {
     const storedRewards = window.localStorage.getItem(rewardsStorageKey);
-    if (!storedRewards) return { checkIns: 15, lastCheckInDate: null };
+    if (!storedRewards) return getDefaultRewards();
 
-    const parsedRewards = JSON.parse(storedRewards) as Partial<CasinoAccessRewards>;
+    const parsedRewards = JSON.parse(storedRewards) as Partial<
+      CasinoAccessRewardsState & { checkIns: number }
+    >;
+    const checkInCount =
+      typeof parsedRewards.checkInCount === "number"
+        ? Math.max(0, parsedRewards.checkInCount)
+        : typeof parsedRewards.checkIns === "number"
+          ? Math.max(0, parsedRewards.checkIns)
+          : 15;
+    const currentTier = getCurrentTier(checkInCount).name;
+    const firstCheckInDate =
+      typeof parsedRewards.firstCheckInDate === "string"
+        ? parsedRewards.firstCheckInDate
+        : null;
 
     return {
-      checkIns:
-        typeof parsedRewards.checkIns === "number"
-          ? Math.max(0, parsedRewards.checkIns)
-          : 15,
+      firstCheckInDate,
+      memberSinceLabel:
+        typeof parsedRewards.memberSinceLabel === "string"
+          ? parsedRewards.memberSinceLabel
+          : firstCheckInDate
+            ? getMemberSinceLabel(firstCheckInDate)
+            : null,
+      checkInCount,
+      currentCardTier: currentTier,
       lastCheckInDate:
         typeof parsedRewards.lastCheckInDate === "string"
           ? parsedRewards.lastCheckInDate
           : null,
+      mintStatus:
+        parsedRewards.mintStatus === "Mint Ready" ||
+        parsedRewards.mintStatus === "Minting Soon"
+          ? parsedRewards.mintStatus
+          : firstCheckInDate
+            ? "Mint Ready"
+            : "Not Minted",
     };
   } catch {
-    return { checkIns: 15, lastCheckInDate: null };
+    return getDefaultRewards();
   }
 }
 
@@ -203,7 +251,9 @@ export default function Home() {
   const [gameStatus, setGameStatus] = useState("Choose your wager. Practice mode is open.");
   const [tableState, setTableState] = useState<TableState>("idle");
   const [handResult, setHandResult] = useState<HandResult>(null);
-  const [rewards, setRewards] = useState<CasinoAccessRewards>(getStoredRewards);
+  const [rewards, setRewards] =
+    useState<CasinoAccessRewardsState>(getStoredRewards);
+  const [farcasterUsername, setFarcasterUsername] = useState("Guest Player");
   const [todayKey, setTodayKey] = useState<string | null>(() =>
     typeof window === "undefined" ? null : getTodayKey()
   );
@@ -300,19 +350,19 @@ export default function Home() {
 
   const playerTotal = handValue(playerCards);
   const dealerTotal = handValue(dealerCards);
-  const currentTier = getCurrentTier(rewards.checkIns);
-  const nextTier = getNextTier(rewards.checkIns);
+  const currentTier = getCurrentTier(rewards.checkInCount);
+  const nextTier = getNextTier(rewards.checkInCount);
   const previousTierCheckIns = currentTier.checkIns;
   const nextTierCheckIns = nextTier?.checkIns ?? currentTier.checkIns;
   const tierSpan = Math.max(nextTierCheckIns - previousTierCheckIns, 1);
   const tierProgress = nextTier
     ? Math.min(
-        ((rewards.checkIns - previousTierCheckIns) / tierSpan) * 100,
+        ((rewards.checkInCount - previousTierCheckIns) / tierSpan) * 100,
         100
       )
     : 100;
   const checkInsRemaining = nextTier
-    ? Math.max(nextTier.checkIns - rewards.checkIns, 0)
+    ? Math.max(nextTier.checkIns - rewards.checkInCount, 0)
     : 0;
   const checkedInToday =
     Boolean(todayKey) && rewards.lastCheckInDate === todayKey;
@@ -320,6 +370,28 @@ export default function Home() {
   useEffect(() => {
     window.localStorage.setItem(rewardsStorageKey, JSON.stringify(rewards));
   }, [rewards]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void import("@farcaster/miniapp-sdk")
+      .then(async ({ sdk }) => {
+        const isMiniApp = await sdk.isInMiniApp();
+        if (!isMiniApp) return;
+
+        const context = await sdk.context;
+        const username = context.user.username ?? context.user.displayName;
+
+        if (!cancelled && username) {
+          setFarcasterUsername(username);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function playCasinoSound(src: string, volume = 0.45) {
     playSound(src, soundOnRef.current, volume);
@@ -499,8 +571,25 @@ export default function Home() {
     triggerHaptic([10, 30, 10], 350);
     setTodayKey(checkInDate);
     setRewards((current) => ({
-      checkIns: current.checkIns + 1,
+      firstCheckInDate: current.firstCheckInDate ?? checkInDate,
+      memberSinceLabel:
+        current.memberSinceLabel ??
+        getMemberSinceLabel(current.firstCheckInDate ?? checkInDate),
+      checkInCount: current.checkInCount + 1,
+      currentCardTier: getCurrentTier(current.checkInCount + 1).name,
       lastCheckInDate: checkInDate,
+      mintStatus:
+        current.mintStatus === "Minting Soon" ? "Minting Soon" : "Mint Ready",
+    }));
+  }
+
+  function stageMintMemberCard() {
+    if (!rewards.firstCheckInDate) return;
+
+    triggerHaptic(8);
+    setRewards((current) => ({
+      ...current,
+      mintStatus: "Minting Soon",
     }));
   }
 
@@ -759,17 +848,21 @@ export default function Home() {
         <section className="mt-4 grid grid-cols-3 gap-2">
           <Stat label="XP" value="8,210" />
           <Stat label="Rank" value="#118" />
-          <Stat label="Streak" value={`${rewards.checkIns}d`} />
+          <Stat label="Streak" value={`${rewards.checkInCount}d`} />
         </section>
 
         <CasinoAccessRewards
           checkedInToday={checkedInToday}
-          checkIns={rewards.checkIns}
+          checkInCount={rewards.checkInCount}
           checkInsRemaining={checkInsRemaining}
           currentTier={currentTier}
           dailyCheckIn={dailyCheckIn}
+          memberSinceLabel={rewards.memberSinceLabel}
+          mintStatus={rewards.mintStatus}
           nextTier={nextTier}
+          onStageMint={stageMintMemberCard}
           tierProgress={tierProgress}
+          username={farcasterUsername}
         />
 
         <Leaderboard />
@@ -1074,25 +1167,34 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 function CasinoAccessRewards({
   checkedInToday,
-  checkIns,
+  checkInCount,
   checkInsRemaining,
   currentTier,
   dailyCheckIn,
+  memberSinceLabel,
+  mintStatus,
   nextTier,
+  onStageMint,
   tierProgress,
+  username,
 }: {
   checkedInToday: boolean;
-  checkIns: number;
+  checkInCount: number;
   checkInsRemaining: number;
   currentTier: CasinoAccessTier;
   dailyCheckIn: () => void;
+  memberSinceLabel: string | null;
+  mintStatus: MintStatus;
   nextTier: CasinoAccessTier | null;
+  onStageMint: () => void;
   tierProgress: number;
+  username: string;
 }) {
   const progressDots = Array.from({ length: 12 }, (_, index) => {
     const threshold = ((index + 1) / 12) * 100;
     return tierProgress >= threshold;
   });
+  const canStageMint = mintStatus !== "Not Minted";
 
   return (
     <section className="mt-4 rounded-[2rem] border border-yellow-400/20 bg-[#120d19] p-4">
@@ -1107,7 +1209,7 @@ function CasinoAccessRewards({
         </div>
 
         <div className="rounded-full border border-yellow-400/25 bg-black/45 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-yellow-100">
-          {checkIns} days
+          {checkInCount} days
         </div>
       </div>
 
@@ -1121,14 +1223,65 @@ function CasinoAccessRewards({
         <div className="mt-2 text-2xl font-black text-white">
           {currentTier.name}
         </div>
-        <div className="mt-6 flex items-end justify-between">
-          <div className="text-xs font-bold text-white/70">
-            Member streak
+
+        <div className="mt-5 grid grid-cols-2 gap-3 text-xs">
+          <div>
+            <div className="font-black uppercase tracking-[0.16em] text-white/45">
+              Username
+            </div>
+            <div className="mt-1 truncate font-black text-white">
+              {username}
+            </div>
           </div>
-          <div className="font-mono text-sm font-black text-white/80">
-            {String(checkIns).padStart(4, "0")}
+          <div>
+            <div className="font-black uppercase tracking-[0.16em] text-white/45">
+              Member Since
+            </div>
+            <div className="mt-1 font-black text-white">
+              {memberSinceLabel ?? "--/--"}
+            </div>
+          </div>
+          <div>
+            <div className="font-black uppercase tracking-[0.16em] text-white/45">
+              Current Tier
+            </div>
+            <div className="mt-1 font-black text-white">
+              {currentTier.name}
+            </div>
+          </div>
+          <div>
+            <div className="font-black uppercase tracking-[0.16em] text-white/45">
+              Mint Status
+            </div>
+            <div className="mt-1 font-black text-white">
+              {mintStatus}
+            </div>
           </div>
         </div>
+      </div>
+
+      <div className="mt-3 rounded-xl border border-yellow-400/20 bg-black/40 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-black text-yellow-100">
+              Mint Member Card
+            </div>
+            <div className="mt-1 text-xs font-bold text-zinc-400">
+              Minting coming soon
+            </div>
+          </div>
+          <div className="text-right text-[11px] font-black text-emerald-200">
+            Estimated network cost: ~$0.05
+          </div>
+        </div>
+
+        <button
+          onClick={onStageMint}
+          disabled={!canStageMint || mintStatus === "Minting Soon"}
+          className="mt-3 w-full rounded-xl border border-yellow-400/35 bg-yellow-400/15 p-3 text-sm font-black text-yellow-100 disabled:opacity-45"
+        >
+          {mintStatus === "Minting Soon" ? "Minting Soon" : "Mint Member Card"}
+        </button>
       </div>
 
       <div className="mt-4 flex items-center justify-between text-sm">
