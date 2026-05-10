@@ -5,18 +5,12 @@ import Link from "next/link";
 import Image from "next/image";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { motion } from "framer-motion";
-import {
-  useAccount,
-  useReadContract,
-  useWaitForTransactionReceipt,
-  useWriteContract,
-} from "wagmi";
+import { useAccount, useReadContract } from "wagmi";
 import { isAddress, parseUnits } from "viem";
 import {
   AFFILIATE_REFERRER_ADDRESS,
   CollateralSymbol,
   OVERTIME_BLACKJACK_ADDRESS,
-  OVERTIME_CHAIN_ID,
   OVERTIME_REFERRAL_URL,
   SUPPORTED_COLLATERALS,
   hasVerifiedOvertimeConfig,
@@ -26,7 +20,7 @@ import { erc20Abi } from "@/lib/overtime/abi";
 const chips = [3, 10, 25, 50, 100];
 
 type Card = { value: string; suit: string; red?: boolean };
-type GamePhase = "idle" | "active" | "over";
+type TableState = "idle" | "dealing" | "playerTurn" | "resolved";
 type MusicTrack = "off" | "vegas-lounge" | "noir-jazz" | "high-roller";
 type AffiliateBetState =
   | "connect"
@@ -101,29 +95,28 @@ function getAffiliateBetState({
 
 function getPlayerStatus({
   affiliateBetState,
-  approvalBusy,
-  approvalConfirmed,
-  gamePhase,
+  tableState,
+  gameStatus,
   isConnected,
 }: {
   affiliateBetState: AffiliateBetState;
-  approvalBusy: boolean;
-  approvalConfirmed: boolean;
-  gamePhase: GamePhase;
+  tableState: TableState;
+  gameStatus: string;
   isConnected: boolean;
 }) {
   if (!isConnected) return "Connect wallet to save your seat.";
-  if (approvalBusy) return "Preparing your chips...";
-  if (gamePhase === "active") return "Hand active. Choose your next move.";
-  if (gamePhase === "over") return "Resolved hand. Ready for the next shoe.";
-  if (affiliateBetState === "pending-vrf") return "Waiting for the shuffle...";
-  if (approvalConfirmed) return "Chips ready. The table is set.";
+  if (tableState === "dealing") return gameStatus;
+  if (tableState === "playerTurn") return "Your move.";
+  if (tableState === "resolved") return gameStatus;
+  if (affiliateBetState === "pending-vrf") return "Waiting for shuffle.";
   return "Staging table: live wagers open after final house verification.";
 }
 
 export default function Home() {
   const ambienceRef = useRef<HTMLAudioElement | null>(null);
   const musicRef = useRef<HTMLAudioElement | null>(null);
+  const dealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dealerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [enteredCasino, setEnteredCasino] = useState(false);
   const [soundOn, setSoundOn] = useState(false);
@@ -147,11 +140,11 @@ export default function Home() {
   ]);
 
   const [hideDealerCard, setHideDealerCard] = useState(true);
-  const [gameStatus, setGameStatus] = useState("Choose your wager. Place bet when ready.");
-  const [gamePhase, setGamePhase] = useState<GamePhase>("idle");
+  const [gameStatus, setGameStatus] = useState("Choose your wager. Practice mode is open.");
+  const [tableState, setTableState] = useState<TableState>("idle");
   const [checkIns, setCheckIns] = useState(15);
 
-  const { address, isConnected, chainId } = useAccount();
+  const { address, isConnected } = useAccount();
   const selectedCollateral =
     SUPPORTED_COLLATERALS.find((collateral) => collateral.symbol === asset) ??
     SUPPORTED_COLLATERALS[0];
@@ -164,12 +157,8 @@ export default function Home() {
   const validAffiliateAddress = isAddress(AFFILIATE_REFERRER_ADDRESS);
   const configReady = hasVerifiedOvertimeConfig() && validCollateralAddress;
   void validAffiliateAddress;
-  const onExpectedChain = chainId === OVERTIME_CHAIN_ID;
 
-  const {
-    data: allowance = BigInt(0),
-    refetch: refetchAllowance,
-  } = useReadContract({
+  const { data: allowance = BigInt(0) } = useReadContract({
     abi: erc20Abi,
     address: validCollateralAddress
       ? (selectedCollateral.address as `0x${string}`)
@@ -187,20 +176,8 @@ export default function Home() {
     },
   });
 
-  const {
-    writeContract: approveCollateral,
-    data: approveHash,
-    isPending: isApprovalPending,
-  } = useWriteContract();
-
-  const { isLoading: isApprovalConfirming, isSuccess: approvalConfirmed } =
-    useWaitForTransactionReceipt({
-      hash: approveHash,
-    });
-
   const needsApproval =
     configReady && wagerAmount > BigInt(0) && allowance < wagerAmount;
-  const approvalBusy = isApprovalPending || isApprovalConfirming;
   const derivedAffiliateBetState = getAffiliateBetState({
     bet,
     isConnected,
@@ -214,9 +191,8 @@ export default function Home() {
       : derivedAffiliateBetState;
   const playerStatus = getPlayerStatus({
     affiliateBetState,
-    approvalBusy,
-    approvalConfirmed,
-    gamePhase,
+    tableState,
+    gameStatus,
     isConnected,
   });
 
@@ -226,29 +202,99 @@ export default function Home() {
   }, [soundOn, selectedMusic]);
 
   useEffect(() => {
-    if (approvalConfirmed) {
-      refetchAllowance();
-      playSound("/sounds/xp.mp3", soundOn, 0.5);
-    }
-  }, [approvalConfirmed, refetchAllowance, soundOn]);
+    return () => {
+      if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
+      if (dealerTimerRef.current) clearTimeout(dealerTimerRef.current);
+    };
+  }, []);
 
   const playerTotal = handValue(playerCards);
   const dealerTotal = handValue(dealerCards);
   const progressToNext = Math.min((checkIns / 30) * 100, 100);
 
-  function startHand() {
-    if (bet < 3) return;
+  function clearTableTimers() {
+    if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
+    if (dealerTimerRef.current) clearTimeout(dealerTimerRef.current);
+    dealTimerRef.current = null;
+    dealerTimerRef.current = null;
+  }
 
+  function resolveDealerHand(finalPlayerCards: Card[], visibleDealerCards: Card[]) {
+    const finalDealerCards = [...visibleDealerCards];
+    let total = handValue(finalDealerCards);
+    const finalPlayerTotal = handValue(finalPlayerCards);
+
+    while (total < 17) {
+      finalDealerCards.push(drawCard());
+      total = handValue(finalDealerCards);
+    }
+
+    setDealerCards(finalDealerCards);
+    setHideDealerCard(false);
+    setTableState("resolved");
+    setManualAffiliateBetState("resolved");
+
+    if (total > 21 || finalPlayerTotal > total) {
+      playSound("/sounds/win.mp3", soundOn, 0.55);
+      setGameStatus("You beat The House.");
+    } else if (finalPlayerTotal < total) {
+      playSound("/sounds/lose.mp3", soundOn, 0.5);
+      setGameStatus("Dealer wins.");
+    } else {
+      setGameStatus("Push.");
+    }
+  }
+
+  function queueDealerReveal(finalPlayerCards: Card[], visibleDealerCards: Card[]) {
+    clearTableTimers();
+    setManualAffiliateBetState(null);
+    setGameStatus("Dealer reveals...");
+    setTableState("dealing");
+    setHideDealerCard(false);
+    playSound("/sounds/card-deal.mp3", soundOn, 0.35);
+
+    dealerTimerRef.current = setTimeout(() => {
+      resolveDealerHand(finalPlayerCards, visibleDealerCards);
+      dealerTimerRef.current = null;
+    }, 700);
+  }
+
+  function startHand() {
+    if (bet < 3 || tableState === "dealing" || tableState === "playerTurn") return;
+
+    clearTableTimers();
     playSound("/sounds/card-deal.mp3", soundOn, 0.45);
-    setPlayerCards([drawCard(), drawCard()]);
-    setDealerCards([drawCard(), drawCard()]);
+    setPlayerCards([]);
+    setDealerCards([]);
     setHideDealerCard(true);
-    setGameStatus("Cards dealt. Hit or stand.");
-    setGamePhase("active");
+    setGameStatus("Shuffling cards...");
+    setTableState("dealing");
+
+    dealTimerRef.current = setTimeout(() => {
+      const nextPlayerCards = [drawCard(), drawCard()];
+      const nextDealerCards = [drawCard(), drawCard()];
+
+      setPlayerCards(nextPlayerCards);
+      setDealerCards(nextDealerCards);
+
+      if (handValue(nextPlayerCards) === 21) {
+        setHideDealerCard(false);
+        setTableState("resolved");
+        setManualAffiliateBetState("resolved");
+        setGameStatus("Blackjack!");
+        playSound("/sounds/win.mp3", soundOn, 0.55);
+      } else {
+        setHideDealerCard(true);
+        setTableState("playerTurn");
+        setGameStatus("Your move.");
+      }
+
+      dealTimerRef.current = null;
+    }, 650);
   }
 
   function hit() {
-    if (gamePhase !== "active") return;
+    if (tableState !== "playerTurn") return;
 
     playSound("/sounds/card-deal.mp3", soundOn, 0.45);
 
@@ -259,43 +305,39 @@ export default function Home() {
 
     if (nextTotal > 21) {
       playSound("/sounds/lose.mp3", soundOn, 0.5);
-      setGameStatus("Bust. The House wins.");
+      setGameStatus("Dealer wins.");
       setHideDealerCard(false);
-      setGamePhase("over");
+      setTableState("resolved");
+      setManualAffiliateBetState("resolved");
     } else {
-      setGameStatus("Card drawn. Hit or stand?");
+      setGameStatus("Your move.");
     }
   }
 
   function stand() {
-    if (gamePhase !== "active") return;
+    if (tableState !== "playerTurn") return;
 
-    playSound("/sounds/card-deal.mp3", soundOn, 0.35);
+    queueDealerReveal(playerCards, dealerCards);
+  }
 
-    const finalDealerCards = [...dealerCards];
-    let total = handValue(finalDealerCards);
+  function doubleDown() {
+    if (tableState !== "playerTurn") return;
 
-    while (total < 17) {
-      finalDealerCards.push(drawCard());
-      total = handValue(finalDealerCards);
-    }
+    playSound("/sounds/card-deal.mp3", soundOn, 0.45);
 
-    setDealerCards(finalDealerCards);
-    setHideDealerCard(false);
-    setGamePhase("over");
+    const nextCards = [...playerCards, drawCard()];
+    setPlayerCards(nextCards);
 
-    if (total > 21) {
-      playSound("/sounds/win.mp3", soundOn, 0.55);
-      setGameStatus("Dealer busts. You win.");
-    } else if (playerTotal > total) {
-      playSound("/sounds/win.mp3", soundOn, 0.55);
-      setGameStatus("You beat The House.");
-    } else if (playerTotal < total) {
+    if (handValue(nextCards) > 21) {
+      setHideDealerCard(false);
+      setTableState("resolved");
+      setManualAffiliateBetState("resolved");
+      setGameStatus("Dealer wins.");
       playSound("/sounds/lose.mp3", soundOn, 0.5);
-      setGameStatus("The House wins.");
-    } else {
-      setGameStatus("Push. Stake returned.");
+      return;
     }
+
+    queueDealerReveal(nextCards, dealerCards);
   }
 
   function dailyCheckIn() {
@@ -303,28 +345,13 @@ export default function Home() {
     setCheckIns((current) => current + 1);
   }
 
-  function handleApproveCollateral() {
-    if (!configReady || wagerAmount <= BigInt(0)) return;
-
-    approveCollateral({
-      abi: erc20Abi,
-      address: selectedCollateral.address as `0x${string}`,
-      functionName: "approve",
-      args: [OVERTIME_BLACKJACK_ADDRESS as `0x${string}`, wagerAmount],
-    });
-  }
-
   function handlePlaceOvertimeBet() {
-    if (configReady && !needsApproval && onExpectedChain) {
-      setManualAffiliateBetState("pending-vrf");
-    }
-
     startHand();
   }
 
-  function showRecoverPlaceholder() {
+  function showSplitPlaceholder() {
     setManualAffiliateBetState("recover");
-    setGameStatus("A table attendant is reviewing that move.");
+    setGameStatus("Split is coming soon at this table.");
   }
 
   async function shareToCastPlaceholder() {
@@ -430,12 +457,18 @@ export default function Home() {
           </div>
 
           <div className="my-6 flex justify-center gap-3">
-            {dealerCards.map((card, index) =>
-              index === 1 && hideDealerCard ? (
-                <CasinoCard key={index} back delay={0.25} />
-              ) : (
-                <CasinoCard key={index} {...card} delay={0.1 + index * 0.15} />
+            {dealerCards.length > 0 ? (
+              dealerCards.map((card, index) =>
+                index === 1 && hideDealerCard ? (
+                  <CasinoCard key={index} back delay={0.25} />
+                ) : (
+                  <CasinoCard key={index} {...card} delay={0.1 + index * 0.15} />
+                )
               )
+            ) : (
+              <div className="flex h-28 items-center rounded-2xl border border-yellow-400/20 bg-black/35 px-6 text-sm font-bold text-zinc-400">
+                Dealer is shuffling
+              </div>
             )}
           </div>
 
@@ -448,40 +481,16 @@ export default function Home() {
           </div>
 
           <div className="my-6 flex flex-wrap justify-center gap-3">
-            {playerCards.map((card, index) => (
-              <CasinoCard key={index} {...card} delay={0.35 + index * 0.12} />
-            ))}
+            {playerCards.length > 0 ? (
+              playerCards.map((card, index) => (
+                <CasinoCard key={index} {...card} delay={0.35 + index * 0.12} />
+              ))
+            ) : (
+              <div className="flex h-28 items-center rounded-2xl border border-yellow-400/20 bg-black/35 px-6 text-sm font-bold text-zinc-400">
+                Waiting for the next hand
+              </div>
+            )}
           </div>
-
-          {gamePhase === "active" && (
-            <div className="grid grid-cols-2 gap-2">
-              <motion.button
-                whileTap={{ scale: 0.95 }}
-                onClick={hit}
-                className="rounded-xl bg-emerald-400 p-3 font-black text-black"
-              >
-                Hit
-              </motion.button>
-
-              <motion.button
-                whileTap={{ scale: 0.95 }}
-                onClick={stand}
-                className="rounded-xl bg-red-500 p-3 font-black text-white"
-              >
-                Stand
-              </motion.button>
-            </div>
-          )}
-
-            {gamePhase === "over" && (
-            <motion.button
-              whileTap={{ scale: 0.97 }}
-              onClick={startHand}
-              className="mt-2 w-full rounded-xl bg-yellow-400 p-3 font-black text-black"
-            >
-              Place Bet / Deal Hand
-            </motion.button>
-          )}
         </motion.section>
 
         <section className="mt-4 rounded-[2rem] bg-[#171122]/95 border border-yellow-400/20 p-4 shadow-xl">
@@ -561,19 +570,15 @@ export default function Home() {
 
           <CasinoActionArea
             affiliateBetState={affiliateBetState}
-            approvalBusy={approvalBusy}
             asset={asset}
             bet={bet}
             configReady={configReady}
-            gamePhase={gamePhase}
+            tableState={tableState}
             hit={hit}
-            isConnected={isConnected}
-            needsApproval={needsApproval}
-            onApproveCollateral={handleApproveCollateral}
-            onDouble={showRecoverPlaceholder}
+            onDouble={doubleDown}
             onPlaceOvertimeBet={handlePlaceOvertimeBet}
             onShareToCast={shareToCastPlaceholder}
-            onSplit={showRecoverPlaceholder}
+            onSplit={showSplitPlaceholder}
             shareStatus={shareStatus}
             stand={stand}
             statusLine={playerStatus}
@@ -586,7 +591,7 @@ export default function Home() {
           <p className="text-sm leading-6 text-zinc-300">
             Get closer to 21 than the dealer without busting. Natural blackjack pays 3:2.
             Regular wins pay 1:1. Dealer hits soft 17. No insurance. No surrender.
-            Cards are dealt with verifiable randomness.
+            Live Overtime hands will use verifiable randomness.
           </p>
         </section>
 
@@ -721,15 +726,11 @@ function CasinoAccessCard() {
 
 function CasinoActionArea({
   affiliateBetState,
-  approvalBusy,
   asset,
   bet,
   configReady,
-  gamePhase,
+  tableState,
   hit,
-  isConnected,
-  needsApproval,
-  onApproveCollateral,
   onDouble,
   onPlaceOvertimeBet,
   onShareToCast,
@@ -739,15 +740,11 @@ function CasinoActionArea({
   statusLine,
 }: {
   affiliateBetState: AffiliateBetState;
-  approvalBusy: boolean;
   asset: CollateralSymbol;
   bet: number;
   configReady: boolean;
-  gamePhase: GamePhase;
+  tableState: TableState;
   hit: () => void;
-  isConnected: boolean;
-  needsApproval: boolean;
-  onApproveCollateral: () => void;
   onDouble: () => void;
   onPlaceOvertimeBet: () => void;
   onShareToCast: () => void;
@@ -756,8 +753,9 @@ function CasinoActionArea({
   stand: () => void;
   statusLine: string;
 }) {
-  const canDeal = bet >= 3 && gamePhase !== "active";
-  const showApproval = isConnected && configReady && needsApproval;
+  const canDeal = bet >= 3 && tableState !== "dealing" && tableState !== "playerTurn";
+  const showPlayerActions = tableState === "playerTurn";
+  const isShuffling = tableState === "dealing";
   const statusTone: Record<AffiliateBetState, string> = {
     connect: "Connect wallet",
     "select-collateral": "Choose chips",
@@ -787,19 +785,7 @@ function CasinoActionArea({
         </div>
       )}
 
-      {showApproval && (
-        <motion.button
-          whileHover={{ scale: 1.03 }}
-          whileTap={{ scale: 0.97 }}
-          onClick={onApproveCollateral}
-          disabled={approvalBusy}
-          className="mt-3 w-full rounded-xl bg-cyan-300 p-3 text-sm font-black text-black disabled:opacity-40"
-        >
-          {approvalBusy ? "Preparing Chips..." : "Ready Chips"}
-        </motion.button>
-      )}
-
-      {gamePhase !== "active" ? (
+      {!showPlayerActions ? (
         <motion.button
           whileHover={{ scale: 1.03 }}
           whileTap={{ scale: 0.97 }}
@@ -807,7 +793,7 @@ function CasinoActionArea({
           disabled={!canDeal}
           className="mt-3 w-full rounded-2xl bg-gradient-to-r from-yellow-300 via-yellow-500 to-orange-700 p-4 text-base font-black text-black shadow-lg shadow-yellow-500/20 disabled:opacity-40"
         >
-          🎲 Deal Hand · ${bet} {asset}
+          {isShuffling ? "🎲 Shuffling..." : `🎲 Deal Hand · $${bet} ${asset}`}
         </motion.button>
       ) : (
         <div className="mt-3 grid grid-cols-2 gap-2">
