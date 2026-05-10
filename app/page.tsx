@@ -686,27 +686,27 @@ function CasinoAccessCard() {
           >
             <button
               onClick={connected ? openAccountModal : openConnectModal}
-              className="group relative h-[82px] w-[188px] overflow-hidden rounded-2xl border border-cyan-300/50 bg-gradient-to-br from-zinc-950 via-slate-900 to-cyan-950 px-4 py-3 text-left shadow-[0_0_30px_rgba(34,211,238,0.22)] transition-all duration-300 hover:scale-[1.03] hover:shadow-[0_0_45px_rgba(34,211,238,0.35)]"
+              className="group relative h-[98px] w-[218px] overflow-hidden rounded-2xl border border-cyan-300/50 bg-gradient-to-br from-zinc-950 via-slate-900 to-cyan-950 px-5 py-4 text-left shadow-[0_0_30px_rgba(34,211,238,0.22)] transition-all duration-300 hover:scale-[1.03] hover:shadow-[0_0_45px_rgba(34,211,238,0.35)]"
             >
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_15%,rgba(255,255,255,.22),transparent_18%),radial-gradient(circle_at_80%_85%,rgba(34,211,238,.25),transparent_35%)]" />
 
-              <div className="absolute right-3 top-3 text-lg opacity-90">💎</div>
+              <div className="absolute right-4 top-4 text-xl opacity-90">💎</div>
 
-              <div className="absolute bottom-2 right-3 text-[8px] font-black uppercase tracking-[0.22em] text-cyan-200/45">
+              <div className="absolute bottom-3 right-4 text-[9px] font-black uppercase tracking-[0.18em] text-cyan-200/50">
                 BLACK DIAMOND
               </div>
 
-              <div className="relative">
-                <div className="text-[9px] font-black uppercase tracking-[0.28em] text-cyan-200/70">
+              <div className="relative flex h-full flex-col justify-between pr-9">
+                <div className="text-[10px] font-black uppercase tracking-[0.22em] text-cyan-200/70">
                   Casino Access
                 </div>
 
-                <div className="mt-1 text-base font-black text-white">
+                <div className="text-2xl font-black leading-none text-white">
                   {connected ? "VIP Active" : "Connect"}
                 </div>
 
-                <div className="mt-1 max-w-[126px] truncate text-[11px] font-bold text-cyan-100/70">
-                  {connected ? account.displayName : "Wallet Required"}
+                <div className="max-w-[150px] truncate text-xs font-bold text-cyan-100/75">
+                  {connected ? account.displayName : "Wallet required"}
                 </div>
               </div>
 
