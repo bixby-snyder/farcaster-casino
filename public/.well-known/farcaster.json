@@ -1,0 +1,21 @@
+{
+  "miniapp": {
+    "version": "1",
+    "name": "Farcaster Casino",
+    "homeUrl": "https://example.com",
+    "iconUrl": "https://example.com/farcaster-casino-icon.png",
+    "splashImageUrl": "https://example.com/farcaster-casino-icon.png",
+    "splashBackgroundColor": "#06030B",
+    "subtitle": "Casino staging app",
+    "description": "Safe staging Mini App for an Overtime Casino affiliate wrapper.",
+    "primaryCategory": "games",
+    "tags": ["casino", "blackjack", "overtime"],
+    "requiredChains": ["eip155:8453"],
+    "requiredCapabilities": [
+      "actions.composeCast",
+      "wallet.getEthereumProvider"
+    ],
+    "noindex": true
+  }
+}
+

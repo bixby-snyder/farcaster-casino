@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { OVERTIME_REFERRAL_URL } from "@/lib/overtime/config";
 
 export default function AffiliateDisclosurePage() {
   return (
@@ -23,14 +24,29 @@ export default function AffiliateDisclosurePage() {
           configuration is used until those deployment details are supplied.
         </p>
 
+        <p className="mt-4 text-sm leading-6 text-zinc-400">
+          The Overtime outbound URL uses referrerId=casino for referral link
+          tracking. Onchain casino attribution is separate and must use the
+          configured affiliate wallet as the _referrer address in verified
+          contract calls.
+        </p>
+
         <Link
           href="/"
           className="mt-6 inline-flex rounded-xl bg-yellow-400 px-4 py-3 text-sm font-black text-black"
         >
           Back to Casino
         </Link>
+
+        <a
+          href={OVERTIME_REFERRAL_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="ml-3 mt-6 inline-flex rounded-xl border border-cyan-300/40 px-4 py-3 text-sm font-black text-cyan-100"
+        >
+          Open Overtime Markets
+        </a>
       </section>
     </main>
   );
 }
-

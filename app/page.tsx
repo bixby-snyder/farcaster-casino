@@ -17,6 +17,7 @@ import {
   CollateralSymbol,
   OVERTIME_BLACKJACK_ADDRESS,
   OVERTIME_CHAIN_ID,
+  OVERTIME_REFERRAL_URL,
   SUPPORTED_COLLATERALS,
   SupportedCollateral,
   hasVerifiedOvertimeConfig,
@@ -116,6 +117,7 @@ export default function Home() {
   const [affiliateResult, setAffiliateResult] = useState(
     "No Overtime bet submitted yet."
   );
+  const [shareStatus, setShareStatus] = useState("Share-to-cast is ready when opened inside Farcaster.");
 
   const [playerCards, setPlayerCards] = useState<Card[]>([
     { value: "A", suit: "♠" },
@@ -311,6 +313,31 @@ export default function Home() {
     setAffiliateResult(
       "Recovery/cancel requires the verified Blackjack stuck-bet timeout and cancel ABI."
     );
+  }
+
+  async function shareToCastPlaceholder() {
+    try {
+      const { sdk } = await import("@farcaster/miniapp-sdk");
+      const isMiniApp = await sdk.isInMiniApp();
+
+      if (!isMiniApp) {
+        setShareStatus("Open this staging app inside Farcaster to compose a cast.");
+        return;
+      }
+
+      const result = await sdk.actions.composeCast({
+        text: "Trying the Farcaster Casino staging Mini App.",
+        embeds: [window.location.href],
+      });
+
+      setShareStatus(
+        result?.cast
+          ? "Cast composed."
+          : "Cast composer closed without posting."
+      );
+    } catch {
+      setShareStatus("Share-to-cast placeholder could not reach the Farcaster host.");
+    }
   }
 
   return (
@@ -536,7 +563,9 @@ export default function Home() {
             onPreviewHand={startHand}
             onRecoverPlaceholder={showRecoverPlaceholder}
             onResolvePlaceholder={markPlaceholderResolved}
+            onShareToCast={shareToCastPlaceholder}
             selectedCollateral={selectedCollateral}
+            shareStatus={shareStatus}
             validAffiliateAddress={validAffiliateAddress}
             validBlackjackAddress={validBlackjackAddress}
             wagerAmount={wagerAmount}
@@ -698,7 +727,9 @@ function OvertimeAffiliatePanel({
   onPreviewHand,
   onRecoverPlaceholder,
   onResolvePlaceholder,
+  onShareToCast,
   selectedCollateral,
+  shareStatus,
   validAffiliateAddress,
   validBlackjackAddress,
   wagerAmount,
@@ -718,7 +749,9 @@ function OvertimeAffiliatePanel({
   onPreviewHand: () => void;
   onRecoverPlaceholder: () => void;
   onResolvePlaceholder: () => void;
+  onShareToCast: () => void;
   selectedCollateral: SupportedCollateral;
+  shareStatus: string;
   validAffiliateAddress: boolean;
   validBlackjackAddress: boolean;
   wagerAmount: bigint;
@@ -778,6 +811,13 @@ function OvertimeAffiliatePanel({
         <div className="mt-1">
           Allowance: {formattedAllowance} {asset}
         </div>
+        <div className="mt-1">
+          URL referral: referrerId=casino is outbound tracking only.
+        </div>
+        <div className="mt-1">
+          Onchain attribution: verified bets must pass the affiliate wallet as
+          _referrer.
+        </div>
       </div>
 
       {!configReady && (
@@ -807,6 +847,26 @@ function OvertimeAffiliatePanel({
         >
           Place Bet
         </motion.button>
+      </div>
+
+      <a
+        href={OVERTIME_REFERRAL_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="mt-2 flex w-full items-center justify-center rounded-xl border border-cyan-400/30 bg-cyan-400/10 p-3 text-sm font-black text-cyan-100"
+      >
+        Open Overtime Markets
+      </a>
+
+      <button
+        onClick={onShareToCast}
+        className="mt-2 w-full rounded-xl border border-purple-300/30 bg-purple-400/10 p-3 text-sm font-black text-purple-100"
+      >
+        Share Mini App
+      </button>
+
+      <div className="mt-2 rounded-xl bg-black/40 p-3 text-xs leading-5 text-zinc-300">
+        {shareStatus}
       </div>
 
       <motion.button

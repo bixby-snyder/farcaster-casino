@@ -5,11 +5,20 @@ This app is wired as an Overtime Casino affiliate wrapper while keeping the exis
 ## Wired
 
 - Public config placeholders in `lib/overtime/config.ts`.
+- Canonical outbound referral URL: `https://www.overtimemarkets.xyz/markets?referrerId=casino`.
 - `.env.example` with public placeholder keys only.
 - ERC20 `approve` and `allowance` ABI definitions.
 - Referrer affiliate event ABI for `ReferrerPaid(referrer, user, amount, betAmount, collateral)`.
 - UI states for wallet connection, collateral selection, wager entry, approval, bet placement gating, pending VRF, resolved result, and stuck-bet recovery placeholder.
 - Affiliate disclosure footer and `/affiliate-disclosure` route.
+
+## Attribution Split
+
+`referrerId=casino` is only frontend URL tracking for outbound onboarding to Overtime Markets.
+
+Onchain casino affiliate attribution is separate. Once verified Overtime Casino Blackjack deployment details are supplied, every real-money Blackjack transaction must pass `NEXT_PUBLIC_AFFILIATE_REFERRER_ADDRESS` as the contract `_referrer` wallet.
+
+Do not use `casino` as an onchain address. Do not replace the wallet `_referrer` with the URL tracking ID.
 
 ## Placeholder
 
@@ -32,4 +41,3 @@ The repo does not include the exact deployed Overtime Blackjack contract ABI/sig
 - Do not commit private keys, mnemonics, wallet exports, production `.env` files, RPC secrets, or API secrets.
 - Do not add unverified contract addresses.
 - Every real-money bet must pass `NEXT_PUBLIC_AFFILIATE_REFERRER_ADDRESS` as `_referrer`.
-
