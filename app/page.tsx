@@ -11,16 +11,17 @@ import {
   AFFILIATE_REFERRER_ADDRESS,
   CollateralSymbol,
   OVERTIME_BLACKJACK_ADDRESS,
-  OVERTIME_REFERRAL_URL,
   SUPPORTED_COLLATERALS,
   hasVerifiedOvertimeConfig,
 } from "@/lib/overtime/config";
 import { erc20Abi } from "@/lib/overtime/abi";
 
 const chips = [3, 10, 25, 50, 100];
+const rewardsStorageKey = "farcaster-casino-access-rewards";
 
 type Card = { value: string; suit: string; red?: boolean };
 type TableState = "idle" | "dealing" | "playerTurn" | "resolved";
+type HandResult = "blackjack" | "win" | "lose" | "push" | null;
 type MusicTrack = "off" | "vegas-lounge" | "noir-jazz" | "high-roller";
 type AffiliateBetState =
   | "connect"
@@ -40,6 +41,62 @@ const suits = [
   { suit: "♦", red: true },
   { suit: "♣", red: false },
 ];
+
+const casinoAccessTiers = [
+  { name: "House Card", checkIns: 0, accent: "from-zinc-700 via-zinc-900 to-black" },
+  { name: "Ruby Card", checkIns: 30, accent: "from-red-500 via-rose-800 to-black" },
+  { name: "Sapphire Card", checkIns: 45, accent: "from-blue-400 via-blue-800 to-black" },
+  { name: "Emerald Card", checkIns: 60, accent: "from-emerald-300 via-emerald-800 to-black" },
+  { name: "Diamond Card", checkIns: 90, accent: "from-cyan-200 via-slate-700 to-black" },
+  { name: "Black Diamond Card", checkIns: 120, accent: "from-zinc-100 via-cyan-950 to-black" },
+];
+
+type CasinoAccessTier = (typeof casinoAccessTiers)[number];
+
+type CasinoAccessRewards = {
+  checkIns: number;
+  lastCheckInDate: string | null;
+};
+
+function getTodayKey() {
+  return new Date().toLocaleDateString("en-CA");
+}
+
+function getCurrentTier(checkIns: number) {
+  return casinoAccessTiers
+    .filter((tier) => checkIns >= tier.checkIns)
+    .at(-1) ?? casinoAccessTiers[0];
+}
+
+function getNextTier(checkIns: number) {
+  return casinoAccessTiers.find((tier) => checkIns < tier.checkIns) ?? null;
+}
+
+function getStoredRewards(): CasinoAccessRewards {
+  if (typeof window === "undefined") {
+    return { checkIns: 15, lastCheckInDate: null };
+  }
+
+  try {
+    const storedRewards = window.localStorage.getItem(rewardsStorageKey);
+    if (!storedRewards) return { checkIns: 15, lastCheckInDate: null };
+
+    const parsedRewards = JSON.parse(storedRewards) as Partial<CasinoAccessRewards>;
+
+    return {
+      checkIns:
+        typeof parsedRewards.checkIns === "number"
+          ? Math.max(0, parsedRewards.checkIns)
+          : 15,
+      lastCheckInDate:
+        typeof parsedRewards.lastCheckInDate === "string"
+          ? parsedRewards.lastCheckInDate
+          : null,
+    };
+  } catch {
+    return { checkIns: 15, lastCheckInDate: null };
+  }
+}
 
 function drawCard(): Card {
   const value = deckValues[Math.floor(Math.random() * deckValues.length)];
@@ -109,7 +166,7 @@ function getPlayerStatus({
   if (tableState === "playerTurn") return "Your move.";
   if (tableState === "resolved") return gameStatus;
   if (affiliateBetState === "pending-vrf") return "Waiting for shuffle.";
-  return "Staging table: live wagers open after final house verification.";
+  return "Staging table: live hands open after final house verification.";
 }
 
 export default function Home() {
@@ -145,7 +202,11 @@ export default function Home() {
   const [hideDealerCard, setHideDealerCard] = useState(true);
   const [gameStatus, setGameStatus] = useState("Choose your wager. Practice mode is open.");
   const [tableState, setTableState] = useState<TableState>("idle");
-  const [checkIns, setCheckIns] = useState(15);
+  const [handResult, setHandResult] = useState<HandResult>(null);
+  const [rewards, setRewards] = useState<CasinoAccessRewards>(getStoredRewards);
+  const [todayKey, setTodayKey] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : getTodayKey()
+  );
 
   const { address, isConnected } = useAccount();
   const selectedCollateral =
@@ -192,6 +253,10 @@ export default function Home() {
     derivedAffiliateBetState === "ready" && manualAffiliateBetState
       ? manualAffiliateBetState
       : derivedAffiliateBetState;
+  const shareLabel =
+    tableState === "resolved" && (handResult === "blackjack" || handResult === "win")
+      ? "Share Win"
+      : "Share Hand";
   const playerStatus = getPlayerStatus({
     affiliateBetState,
     tableState,
@@ -235,7 +300,26 @@ export default function Home() {
 
   const playerTotal = handValue(playerCards);
   const dealerTotal = handValue(dealerCards);
-  const progressToNext = Math.min((checkIns / 30) * 100, 100);
+  const currentTier = getCurrentTier(rewards.checkIns);
+  const nextTier = getNextTier(rewards.checkIns);
+  const previousTierCheckIns = currentTier.checkIns;
+  const nextTierCheckIns = nextTier?.checkIns ?? currentTier.checkIns;
+  const tierSpan = Math.max(nextTierCheckIns - previousTierCheckIns, 1);
+  const tierProgress = nextTier
+    ? Math.min(
+        ((rewards.checkIns - previousTierCheckIns) / tierSpan) * 100,
+        100
+      )
+    : 100;
+  const checkInsRemaining = nextTier
+    ? Math.max(nextTier.checkIns - rewards.checkIns, 0)
+    : 0;
+  const checkedInToday =
+    Boolean(todayKey) && rewards.lastCheckInDate === todayKey;
+
+  useEffect(() => {
+    window.localStorage.setItem(rewardsStorageKey, JSON.stringify(rewards));
+  }, [rewards]);
 
   function playCasinoSound(src: string, volume = 0.45) {
     playSound(src, soundOnRef.current, volume);
@@ -293,11 +377,14 @@ export default function Home() {
     if (total > 21 || finalPlayerTotal > total) {
       playCasinoSound("/sounds/win.mp3", 0.55);
       triggerHaptic([12, 35, 18], 450);
+      setHandResult("win");
       setGameStatus("You beat The House.");
     } else if (finalPlayerTotal < total) {
       playCasinoSound("/sounds/lose.mp3", 0.5);
+      setHandResult("lose");
       setGameStatus("Dealer wins.");
     } else {
+      setHandResult("push");
       setGameStatus("Push.");
     }
   }
@@ -324,6 +411,7 @@ export default function Home() {
     playCasinoSound("/sounds/card-deal.mp3", 0.45);
     setPlayerCards([]);
     setDealerCards([]);
+    setHandResult(null);
     setHideDealerCard(true);
     setGameStatus("Shuffling cards...");
     setTableState("dealing");
@@ -339,6 +427,7 @@ export default function Home() {
         setHideDealerCard(false);
         setTableState("resolved");
         setManualAffiliateBetState("resolved");
+        setHandResult("blackjack");
         setGameStatus("Blackjack!");
         playCasinoSound("/sounds/win.mp3", 0.55);
         triggerHaptic([12, 35, 18], 450);
@@ -365,6 +454,7 @@ export default function Home() {
 
     if (nextTotal > 21) {
       playCasinoSound("/sounds/lose.mp3", 0.5);
+      setHandResult("lose");
       setGameStatus("Dealer wins.");
       setHideDealerCard(false);
       setTableState("resolved");
@@ -392,6 +482,7 @@ export default function Home() {
       setHideDealerCard(false);
       setTableState("resolved");
       setManualAffiliateBetState("resolved");
+      setHandResult("lose");
       setGameStatus("Dealer wins.");
       playCasinoSound("/sounds/lose.mp3", 0.5);
       return;
@@ -401,12 +492,19 @@ export default function Home() {
   }
 
   function dailyCheckIn() {
+    const checkInDate = getTodayKey();
+    if (rewards.lastCheckInDate === checkInDate) return;
+
     playCasinoSound("/sounds/xp.mp3", 0.45);
     triggerHaptic([10, 30, 10], 350);
-    setCheckIns((current) => current + 1);
+    setTodayKey(checkInDate);
+    setRewards((current) => ({
+      checkIns: current.checkIns + 1,
+      lastCheckInDate: checkInDate,
+    }));
   }
 
-  function handlePlaceOvertimeBet() {
+  function handleDealHand() {
     startHand();
   }
 
@@ -426,7 +524,10 @@ export default function Home() {
       }
 
       const result = await sdk.actions.composeCast({
-        text: "Trying the Farcaster Casino staging Mini App.",
+        text:
+          shareLabel === "Share Win"
+            ? "I just beat the house in Farcaster Casino."
+            : "Playing a hand in Farcaster Casino.",
         embeds: [window.location.href],
       });
 
@@ -549,6 +650,23 @@ export default function Home() {
               </div>
             )}
           </div>
+
+          <CasinoActionArea
+            affiliateBetState={affiliateBetState}
+            asset={asset}
+            bet={bet}
+            configReady={configReady}
+            tableState={tableState}
+            hit={hit}
+            onDouble={doubleDown}
+            onDealHand={handleDealHand}
+            onShareToCast={shareToCastPlaceholder}
+            onSplit={showSplitPlaceholder}
+            shareLabel={shareLabel}
+            shareStatus={shareStatus}
+            stand={stand}
+            statusLine={playerStatus}
+          />
         </motion.section>
 
         <section className="mt-4 rounded-[2rem] bg-[#171122]/95 border border-yellow-400/20 p-4 shadow-xl">
@@ -564,7 +682,7 @@ export default function Home() {
               <span>Set The Stakes</span>
             </div>
 
-            <div className="text-xs text-zinc-400">Base · Minimum bet: $3</div>
+            <div className="text-xs text-zinc-400">Minimum bet: $3</div>
           </div>
 
           <div className="mt-3 grid grid-cols-5 gap-2">
@@ -626,22 +744,6 @@ export default function Home() {
               ))}
             </select>
           </div>
-
-          <CasinoActionArea
-            affiliateBetState={affiliateBetState}
-            asset={asset}
-            bet={bet}
-            configReady={configReady}
-            tableState={tableState}
-            hit={hit}
-            onDouble={doubleDown}
-            onPlaceOvertimeBet={handlePlaceOvertimeBet}
-            onShareToCast={shareToCastPlaceholder}
-            onSplit={showSplitPlaceholder}
-            shareStatus={shareStatus}
-            stand={stand}
-            statusLine={playerStatus}
-          />
         </section>
 
         <section className="mt-4 rounded-[2rem] bg-[#171122]/95 border border-yellow-400/20 p-4">
@@ -650,27 +752,31 @@ export default function Home() {
           <p className="text-sm leading-6 text-zinc-300">
             Get closer to 21 than the dealer without busting. Natural blackjack pays 3:2.
             Regular wins pay 1:1. Dealer hits soft 17. No insurance. No surrender.
-            Live Overtime hands will use verifiable randomness.
+            Live hands will use verifiable randomness.
           </p>
         </section>
 
         <section className="mt-4 grid grid-cols-3 gap-2">
           <Stat label="XP" value="8,210" />
           <Stat label="Rank" value="#118" />
-          <Stat label="Streak" value={`${checkIns}d`} />
+          <Stat label="Streak" value={`${rewards.checkIns}d`} />
         </section>
 
-        <DailyQuest
-          checkIns={checkIns}
-          progressToNext={progressToNext}
+        <CasinoAccessRewards
+          checkedInToday={checkedInToday}
+          checkIns={rewards.checkIns}
+          checkInsRemaining={checkInsRemaining}
+          currentTier={currentTier}
           dailyCheckIn={dailyCheckIn}
+          nextTier={nextTier}
+          tierProgress={tierProgress}
         />
 
         <Leaderboard />
 
         <footer className="mb-8 rounded-[2rem] border border-yellow-400/20 bg-black/45 p-4 text-xs leading-5 text-zinc-300">
           Affiliate disclosure: This interface may receive referral
-          compensation from qualifying Overtime Casino activity. Referrals do
+          compensation from qualifying casino activity. Referrals do
           not change odds, payout rules, or user fees. 18+ only. Follow your
           local laws.{" "}
           <Link href="/affiliate-disclosure" className="font-black text-yellow-200">
@@ -702,10 +808,10 @@ function Header({
 
         <h1 className="text-3xl font-black tracking-tight">Beat The House</h1>
 
-        <div className="mt-3 grid grid-cols-2 gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
           <button
             onClick={toggleSound}
-            className="rounded-xl border border-yellow-400/30 bg-black/50 px-3 py-2 text-xs font-black text-yellow-200"
+            className="min-w-20 rounded-xl border border-yellow-400/30 bg-black/50 px-3 py-2 text-xs font-black text-yellow-200"
           >
             {soundOn ? "🔊 On" : "🔇 Off"}
           </button>
@@ -713,7 +819,7 @@ function Header({
           <select
             value={selectedMusic}
             onChange={(e) => setSelectedMusic(e.target.value as MusicTrack)}
-            className="rounded-xl border border-cyan-400/30 bg-[#050713] px-3 py-2 text-xs font-black text-cyan-200 outline-none"
+            className="min-w-40 flex-1 rounded-xl border border-cyan-400/30 bg-[#050713] px-3 py-2 text-xs font-black text-cyan-200 outline-none"
           >
             <option value="off">Music Off</option>
             <option value="vegas-lounge">Vegas Lounge</option>
@@ -791,9 +897,10 @@ function CasinoActionArea({
   tableState,
   hit,
   onDouble,
-  onPlaceOvertimeBet,
+  onDealHand,
   onShareToCast,
   onSplit,
+  shareLabel,
   shareStatus,
   stand,
   statusLine,
@@ -805,9 +912,10 @@ function CasinoActionArea({
   tableState: TableState;
   hit: () => void;
   onDouble: () => void;
-  onPlaceOvertimeBet: () => void;
+  onDealHand: () => void;
   onShareToCast: () => void;
   onSplit: () => void;
+  shareLabel: string;
   shareStatus: string;
   stand: () => void;
   statusLine: string;
@@ -839,8 +947,7 @@ function CasinoActionArea({
 
       {!configReady && (
         <div className="mt-3 rounded-xl border border-yellow-400/15 bg-black/35 p-3 text-xs font-bold leading-5 text-zinc-300">
-          Practice table is open. Live Overtime wagers unlock after final table
-          verification.
+          Practice table is open. Live hands unlock after final table verification.
         </div>
       )}
 
@@ -848,7 +955,7 @@ function CasinoActionArea({
         <motion.button
           whileHover={{ scale: 1.03 }}
           whileTap={{ scale: 0.97 }}
-          onClick={onPlaceOvertimeBet}
+          onClick={onDealHand}
           disabled={!canDeal}
           className="mt-3 w-full rounded-2xl bg-gradient-to-r from-yellow-300 via-yellow-500 to-orange-700 p-4 text-base font-black text-black shadow-lg shadow-yellow-500/20 disabled:opacity-40"
         >
@@ -890,20 +997,12 @@ function CasinoActionArea({
         </div>
       )}
 
-      <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-black">
-        <a
-          href={OVERTIME_REFERRAL_URL}
-          target="_blank"
-          rel="noreferrer"
-          className="rounded-xl border border-cyan-400/25 bg-cyan-400/10 p-3 text-center text-cyan-100"
-        >
-          Visit Overtime
-        </a>
+      <div className="mt-3 text-xs font-black">
         <button
           onClick={onShareToCast}
-          className="rounded-xl border border-purple-300/25 bg-purple-400/10 p-3 text-purple-100"
+          className="w-full rounded-xl border border-purple-300/25 bg-purple-400/10 p-3 text-purple-100"
         >
-          Share Table
+          {shareLabel}
         </button>
       </div>
 
@@ -973,47 +1072,104 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function DailyQuest({
+function CasinoAccessRewards({
+  checkedInToday,
   checkIns,
-  progressToNext,
+  checkInsRemaining,
+  currentTier,
   dailyCheckIn,
+  nextTier,
+  tierProgress,
 }: {
+  checkedInToday: boolean;
   checkIns: number;
-  progressToNext: number;
+  checkInsRemaining: number;
+  currentTier: CasinoAccessTier;
   dailyCheckIn: () => void;
+  nextTier: CasinoAccessTier | null;
+  tierProgress: number;
 }) {
-  return (
-    <section className="mt-4 rounded-[2rem] bg-[#071c18]/95 border border-emerald-400/20 p-4">
-      <div className="text-emerald-200 font-black">Daily Quest Check-In</div>
+  const progressDots = Array.from({ length: 12 }, (_, index) => {
+    const threshold = ((index + 1) / 12) * 100;
+    return tierProgress >= threshold;
+  });
 
-      <div className="mt-3 flex items-center justify-between text-sm">
-        <span className="text-zinc-300">Progress to next boost</span>
-        <span className="font-black">{checkIns} / 30</span>
+  return (
+    <section className="mt-4 rounded-[2rem] border border-yellow-400/20 bg-[#120d19] p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-yellow-200 font-black">Casino Access Rewards</div>
+          <div className="mt-1 text-xs font-bold text-zinc-400">
+            {nextTier
+              ? `${checkInsRemaining} check-ins to ${nextTier.name}`
+              : "Top card tier unlocked"}
+          </div>
+        </div>
+
+        <div className="rounded-full border border-yellow-400/25 bg-black/45 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-yellow-100">
+          {checkIns} days
+        </div>
+      </div>
+
+      <div
+        className={`relative overflow-hidden rounded-2xl border border-white/15 bg-gradient-to-br ${currentTier.accent} p-4 shadow-xl shadow-black/30`}
+      >
+        <div className="absolute right-4 top-4 text-3xl opacity-80">♦</div>
+        <div className="text-[10px] font-black uppercase tracking-[0.28em] text-white/60">
+          Current Card
+        </div>
+        <div className="mt-2 text-2xl font-black text-white">
+          {currentTier.name}
+        </div>
+        <div className="mt-6 flex items-end justify-between">
+          <div className="text-xs font-bold text-white/70">
+            Member streak
+          </div>
+          <div className="font-mono text-sm font-black text-white/80">
+            {String(checkIns).padStart(4, "0")}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 flex items-center justify-between text-sm">
+        <span className="text-zinc-300">Next card</span>
+        <span className="font-black text-white">
+          {nextTier ? nextTier.name : "Complete"}
+        </span>
       </div>
 
       <div className="mt-2 h-3 rounded-full bg-zinc-800">
         <div
-          style={{ width: `${progressToNext}%` }}
-          className="h-3 rounded-full bg-gradient-to-r from-emerald-300 to-green-600"
+          style={{ width: `${tierProgress}%` }}
+          className="h-3 rounded-full bg-gradient-to-r from-yellow-200 via-emerald-300 to-cyan-300"
         />
       </div>
 
-      <div className="mt-2 flex justify-between text-xs text-zinc-400">
-        <span>Current: 1.2x XP</span>
-        <span>Next: 1.5x XP</span>
+      <div className="mt-3 grid grid-cols-12 gap-1">
+        {progressDots.map((filled, index) => (
+          <div
+            key={index}
+            className={`h-2 rounded-full ${
+              filled ? "bg-yellow-300" : "bg-black/60"
+            }`}
+          />
+        ))}
       </div>
 
-      <div className="mt-3 rounded-xl border border-emerald-400/20 bg-emerald-500/10 p-3 text-sm font-bold text-emerald-200">
-        Offchain streak tracker. No wallet transaction required.
+      <div className="mt-3 rounded-xl border border-emerald-400/20 bg-emerald-500/10 p-3 text-sm font-bold text-emerald-100">
+        {checkedInToday
+          ? "Checked in today. Come back tomorrow for the next stamp."
+          : "Check in once per day to stamp your casino access card."}
       </div>
 
       <motion.button
         whileHover={{ scale: 1.03 }}
         whileTap={{ scale: 0.97 }}
         onClick={dailyCheckIn}
-        className="mt-4 w-full rounded-2xl bg-gradient-to-r from-emerald-300 to-green-700 p-3 font-black text-black disabled:opacity-40"
+        disabled={checkedInToday}
+        className="mt-4 w-full rounded-2xl bg-gradient-to-r from-emerald-300 to-green-700 p-3 font-black text-black disabled:opacity-45"
       >
-        Daily Check-In
+        {checkedInToday ? "Checked in today" : "Daily Casino Check-In"}
       </motion.button>
     </section>
   );
