@@ -116,6 +116,7 @@ export default function Home() {
   const ambienceRef = useRef<HTMLAudioElement | null>(null);
   const musicRef = useRef<HTMLAudioElement | null>(null);
   const soundOnRef = useRef(false);
+  const hapticLockedRef = useRef(false);
   const dealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dealerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -240,6 +241,17 @@ export default function Home() {
     playSound(src, soundOnRef.current, volume);
   }
 
+  function triggerHaptic(pattern: number | number[], minimumGapMs = 90) {
+    if (typeof navigator === "undefined" || !("vibrate" in navigator)) return;
+    if (hapticLockedRef.current) return;
+
+    hapticLockedRef.current = true;
+    navigator.vibrate(pattern);
+    window.setTimeout(() => {
+      hapticLockedRef.current = false;
+    }, minimumGapMs);
+  }
+
   function enterWithSound() {
     setAudioUnlocked(true);
     setSoundOn(true);
@@ -280,6 +292,7 @@ export default function Home() {
 
     if (total > 21 || finalPlayerTotal > total) {
       playCasinoSound("/sounds/win.mp3", 0.55);
+      triggerHaptic([12, 35, 18], 450);
       setGameStatus("You beat The House.");
     } else if (finalPlayerTotal < total) {
       playCasinoSound("/sounds/lose.mp3", 0.5);
@@ -307,6 +320,7 @@ export default function Home() {
     if (bet < 3 || tableState === "dealing" || tableState === "playerTurn") return;
 
     clearTableTimers();
+    triggerHaptic(12);
     playCasinoSound("/sounds/card-deal.mp3", 0.45);
     setPlayerCards([]);
     setDealerCards([]);
@@ -327,6 +341,7 @@ export default function Home() {
         setManualAffiliateBetState("resolved");
         setGameStatus("Blackjack!");
         playCasinoSound("/sounds/win.mp3", 0.55);
+        triggerHaptic([12, 35, 18], 450);
       } else {
         setHideDealerCard(true);
         setTableState("playerTurn");
@@ -341,6 +356,7 @@ export default function Home() {
     if (tableState !== "playerTurn") return;
 
     playCasinoSound("/sounds/card-deal.mp3", 0.45);
+    triggerHaptic(10);
 
     const nextCards = [...playerCards, drawCard()];
     const nextTotal = handValue(nextCards);
@@ -386,6 +402,7 @@ export default function Home() {
 
   function dailyCheckIn() {
     playCasinoSound("/sounds/xp.mp3", 0.45);
+    triggerHaptic([10, 30, 10], 350);
     setCheckIns((current) => current + 1);
   }
 
@@ -558,6 +575,7 @@ export default function Home() {
                 key={chip}
                 onClick={() => {
                   playCasinoSound("/sounds/chip-click.mp3", 0.45);
+                  triggerHaptic(8);
                   setBet(chip);
                   setCustomBet(String(chip));
                 }}
