@@ -115,11 +115,13 @@ function getPlayerStatus({
 export default function Home() {
   const ambienceRef = useRef<HTMLAudioElement | null>(null);
   const musicRef = useRef<HTMLAudioElement | null>(null);
+  const soundOnRef = useRef(false);
   const dealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dealerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [enteredCasino, setEnteredCasino] = useState(false);
   const [soundOn, setSoundOn] = useState(false);
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [selectedMusic, setSelectedMusic] = useState<MusicTrack>("vegas-lounge");
 
   const [bet, setBet] = useState(25);
@@ -197,9 +199,31 @@ export default function Home() {
   });
 
   useEffect(() => {
-    if (ambienceRef.current) ambienceRef.current.volume = 0.22;
-    if (musicRef.current) musicRef.current.volume = 0.14;
-  }, [soundOn, selectedMusic]);
+    soundOnRef.current = soundOn;
+  }, [soundOn]);
+
+  useEffect(() => {
+    const ambience = ambienceRef.current;
+    const music = musicRef.current;
+
+    if (ambience) ambience.volume = 0.22;
+    if (music) music.volume = 0.14;
+
+    if (!audioUnlocked || !soundOn) {
+      ambience?.pause();
+      music?.pause();
+      return;
+    }
+
+    ambience?.play().catch(() => {});
+
+    if (selectedMusic === "off") {
+      music?.pause();
+      return;
+    }
+
+    music?.play().catch(() => {});
+  }, [audioUnlocked, soundOn, selectedMusic]);
 
   useEffect(() => {
     return () => {
@@ -211,6 +235,26 @@ export default function Home() {
   const playerTotal = handValue(playerCards);
   const dealerTotal = handValue(dealerCards);
   const progressToNext = Math.min((checkIns / 30) * 100, 100);
+
+  function playCasinoSound(src: string, volume = 0.45) {
+    playSound(src, soundOnRef.current, volume);
+  }
+
+  function enterWithSound() {
+    setAudioUnlocked(true);
+    setSoundOn(true);
+    setEnteredCasino(true);
+  }
+
+  function enterMuted() {
+    setSoundOn(false);
+    setEnteredCasino(true);
+  }
+
+  function toggleSound() {
+    setAudioUnlocked(true);
+    setSoundOn((current) => !current);
+  }
 
   function clearTableTimers() {
     if (dealTimerRef.current) clearTimeout(dealTimerRef.current);
@@ -235,10 +279,10 @@ export default function Home() {
     setManualAffiliateBetState("resolved");
 
     if (total > 21 || finalPlayerTotal > total) {
-      playSound("/sounds/win.mp3", soundOn, 0.55);
+      playCasinoSound("/sounds/win.mp3", 0.55);
       setGameStatus("You beat The House.");
     } else if (finalPlayerTotal < total) {
-      playSound("/sounds/lose.mp3", soundOn, 0.5);
+      playCasinoSound("/sounds/lose.mp3", 0.5);
       setGameStatus("Dealer wins.");
     } else {
       setGameStatus("Push.");
@@ -251,7 +295,7 @@ export default function Home() {
     setGameStatus("Dealer reveals...");
     setTableState("dealing");
     setHideDealerCard(false);
-    playSound("/sounds/card-deal.mp3", soundOn, 0.35);
+    playCasinoSound("/sounds/card-deal.mp3", 0.35);
 
     dealerTimerRef.current = setTimeout(() => {
       resolveDealerHand(finalPlayerCards, visibleDealerCards);
@@ -263,7 +307,7 @@ export default function Home() {
     if (bet < 3 || tableState === "dealing" || tableState === "playerTurn") return;
 
     clearTableTimers();
-    playSound("/sounds/card-deal.mp3", soundOn, 0.45);
+    playCasinoSound("/sounds/card-deal.mp3", 0.45);
     setPlayerCards([]);
     setDealerCards([]);
     setHideDealerCard(true);
@@ -282,7 +326,7 @@ export default function Home() {
         setTableState("resolved");
         setManualAffiliateBetState("resolved");
         setGameStatus("Blackjack!");
-        playSound("/sounds/win.mp3", soundOn, 0.55);
+        playCasinoSound("/sounds/win.mp3", 0.55);
       } else {
         setHideDealerCard(true);
         setTableState("playerTurn");
@@ -296,7 +340,7 @@ export default function Home() {
   function hit() {
     if (tableState !== "playerTurn") return;
 
-    playSound("/sounds/card-deal.mp3", soundOn, 0.45);
+    playCasinoSound("/sounds/card-deal.mp3", 0.45);
 
     const nextCards = [...playerCards, drawCard()];
     const nextTotal = handValue(nextCards);
@@ -304,7 +348,7 @@ export default function Home() {
     setPlayerCards(nextCards);
 
     if (nextTotal > 21) {
-      playSound("/sounds/lose.mp3", soundOn, 0.5);
+      playCasinoSound("/sounds/lose.mp3", 0.5);
       setGameStatus("Dealer wins.");
       setHideDealerCard(false);
       setTableState("resolved");
@@ -323,7 +367,7 @@ export default function Home() {
   function doubleDown() {
     if (tableState !== "playerTurn") return;
 
-    playSound("/sounds/card-deal.mp3", soundOn, 0.45);
+    playCasinoSound("/sounds/card-deal.mp3", 0.45);
 
     const nextCards = [...playerCards, drawCard()];
     setPlayerCards(nextCards);
@@ -333,7 +377,7 @@ export default function Home() {
       setTableState("resolved");
       setManualAffiliateBetState("resolved");
       setGameStatus("Dealer wins.");
-      playSound("/sounds/lose.mp3", soundOn, 0.5);
+      playCasinoSound("/sounds/lose.mp3", 0.5);
       return;
     }
 
@@ -341,7 +385,7 @@ export default function Home() {
   }
 
   function dailyCheckIn() {
-    playSound("/sounds/xp.mp3", soundOn, 0.45);
+    playCasinoSound("/sounds/xp.mp3", 0.45);
     setCheckIns((current) => current + 1);
   }
 
@@ -403,17 +447,14 @@ export default function Home() {
             </p>
 
             <button
-              onClick={() => {
-                setEnteredCasino(true);
-                setSoundOn(true);
-              }}
+              onClick={enterWithSound}
               className="mt-6 w-full rounded-2xl bg-gradient-to-r from-yellow-300 via-yellow-500 to-orange-700 p-4 font-black text-black shadow-lg shadow-yellow-500/30"
             >
               Enter Casino
             </button>
 
             <button
-              onClick={() => setEnteredCasino(true)}
+              onClick={enterMuted}
               className="mt-3 text-xs font-bold text-zinc-400"
             >
               Enter without sound
@@ -422,14 +463,14 @@ export default function Home() {
         </div>
       )}
 
-      {soundOn && (
+      {audioUnlocked && (
         <>
-          <audio ref={ambienceRef} autoPlay loop>
+          <audio ref={ambienceRef} loop preload="auto">
             <source src="/casino-ambience.mp3" type="audio/mpeg" />
           </audio>
 
           {selectedMusic !== "off" && (
-            <audio ref={musicRef} autoPlay loop key={selectedMusic}>
+            <audio ref={musicRef} loop preload="auto" key={selectedMusic}>
               <source src={`/music/${selectedMusic}.mp3`} type="audio/mpeg" />
             </audio>
           )}
@@ -441,7 +482,7 @@ export default function Home() {
       <div className="relative mx-auto max-w-md px-4 py-5">
         <Header
           soundOn={soundOn}
-          setSoundOn={setSoundOn}
+          toggleSound={toggleSound}
           selectedMusic={selectedMusic}
           setSelectedMusic={setSelectedMusic}
         />
@@ -516,7 +557,7 @@ export default function Home() {
                 whileTap={{ scale: 0.94 }}
                 key={chip}
                 onClick={() => {
-                  playSound("/sounds/chip-click.mp3", soundOn, 0.45);
+                  playCasinoSound("/sounds/chip-click.mp3", 0.45);
                   setBet(chip);
                   setCustomBet(String(chip));
                 }}
@@ -625,12 +666,12 @@ export default function Home() {
 
 function Header({
   soundOn,
-  setSoundOn,
+  toggleSound,
   selectedMusic,
   setSelectedMusic,
 }: {
   soundOn: boolean;
-  setSoundOn: (value: boolean) => void;
+  toggleSound: () => void;
   selectedMusic: MusicTrack;
   setSelectedMusic: (value: MusicTrack) => void;
 }) {
@@ -645,7 +686,7 @@ function Header({
 
         <div className="mt-3 grid grid-cols-2 gap-2">
           <button
-            onClick={() => setSoundOn(!soundOn)}
+            onClick={toggleSound}
             className="rounded-xl border border-yellow-400/30 bg-black/50 px-3 py-2 text-xs font-black text-yellow-200"
           >
             {soundOn ? "🔊 On" : "🔇 Off"}
